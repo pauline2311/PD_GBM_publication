@@ -1,0 +1,316 @@
+---
+title: "Extracellular metabolomics GBM cells"
+author: "Pauline Mencke"
+date: "12/31/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Library loading, include=FALSE}
+
+library(data.table)
+library(janitor)
+library(tidyxl)
+library(reshape2)
+library(pillar)
+library(anchors)
+library(tidyverse)
+library(ggplot2)
+library(dunn.test)
+library(ggpubr) 
+library(dplyr)
+library(rstatix)
+library(dlookr)
+library(png)
+library(grid)
+library(scales)
+library(magick)
+library(ggpattern)
+
+```
+
+```{r Loading of Data}
+
+setwd('C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/R analysis metabolomics/Extracellular/')
+
+
+#Load tables  
+Table_Standards_GBM <- readRDS("Table_Standards_GBM.rds")  
+Table_Blank_GBM <- readRDS("Table_Blank_GBM.rds")
+Table_GBM <- readRDS("Table_GBM.rds")
+Table_GBM <- Table_GBM[- grep("Fresh", Table_GBM$Name),]
+
+#before we start with the calculation for the different cell types, we need to plot the standard curves for the measured peak areas of each metabolite and the corresponding concentration and determine the linear regression equation and evaluate the R squared value. Then, we can use the equation from the respective standard curve of each metabolite to calculate the concentration of each metabolite in the medium using the peak areas for each sample 
+
+
+#calculate the mean of the technical triplicates for the standards 
+Table_Standards_means <- Table_Standards_GBM %>% 
+  group_by(Metabolite, Name) %>% 
+  mutate("Mean" = mean(value),
+         "Stdev" = sd(value)) %>% 
+  distinct(Metabolite, Name, value, Mean, Stdev)
+
+#create a column that determines whether there are outliers in the data
+Table_Standards_outliers <- Table_Standards_means %>%
+  mutate(CV=Stdev/Mean) %>%
+  mutate(deviation = ifelse(CV >= 1, TRUE, FALSE))
+
+#create a table with no deviated data
+Table_Standards_no_outliers <- Table_Standards_outliers %>%
+  group_by(Metabolite, Name) %>%
+  filter(deviation == FALSE)
+
+#create a table with deviated data
+Table_Standards_outliers <- Table_Standards_outliers %>%
+  #keep only the rows with CV >= 1
+  filter(deviation == TRUE)
+#remove outliers in deviated data
+#find Q1, Q3, and interquartile range for values in column A
+Q1 <- quantile(Table_Standards_outliers$value, .25)
+Q3 <- quantile(Table_Standards_outliers$value, .75)
+IQR <- IQR(Table_Standards_outliers$value)
+
+#only keep rows in dataframe that have values within 1.5*IQR of Q1 and Q3
+Table_Standards_outliers_removed <- subset(Table_Standards_outliers, Table_Standards_outliers$value > (Q1 - 1.5*IQR) & Table_Standards_outliers$value < (Q3 + 1.5*IQR))
+
+
+#bind data to obtain final df that contains only non deviated data
+Table_Standards_without_outliers <- rbind(Table_Standards_no_outliers, Table_Standards_outliers_removed) %>%
+  distinct(Metabolite, Name, Mean)
+
+
+Table_Standards_without_outliers$Name <- factor(Table_Standards_without_outliers$Name, levels = c("STD_10", "STD_20", "STD_40", "STD_60", "STD_80", "STD_100"))
+                                     
+#add info on protein level for normalization to protein level  
+Table_GBM <- Table_GBM %>% 
+  separate(Name, into = c("V1", "V2", "V3", "V4"), sep = "_") %>% 
+  mutate(binding_Name = glue::glue("{V1}_{V2}_{V3}_{condition}_{V4}")) %>%  
+  filter(!Metabolite == "Glucose") 
+Table_GBM$Metabolite <- gsub("13CGlucose", "Glucose", Table_GBM$Metabolite)  
+  
+  
+Table_protein_quanti_GBM = readxl::read_excel('C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/Protein quantification for normalization extracellular and IGC/GBM/final/GBM protein quantification final.xlsx', range = "A1:B91")
+Table_protein_quanti_GBM <- Table_protein_quanti_GBM %>% 
+   mutate(binding_Name = Name)
+p <- left_join(Table_GBM, Table_protein_quanti_GBM, by = "binding_Name") %>%  
+   mutate(Name = glue::glue("{V1}_{V2}_{V3}_{V4}")) 
+Table_final_GBM <- p %>%
+  dplyr::select(Metabolite, Name, condition, Technical_Replicate, value, protein_well) 
+ 
+
+                                     
+                                     
+
+```
+
+
+```{r linear regression and calculation of mol per metabolite - trying to do it for multiple metabolites }
+#Formatting table of standards for calculations 
+Table_Standards_mM = readxl::read_excel('C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/Extracellular metabolomics/Standards/Standards_all.xlsx', range = "A1:C115")
+Table_Standards_peak_areas <- Table_Standards_without_outliers %>%
+  mutate(binding_name = glue::glue("{Metabolite}_{Name}"))
+Table_Standards_mM <- Table_Standards_mM %>%
+   mutate(binding_name = glue::glue("{Metabolite}_{Name}"))
+p <- left_join(Table_Standards_peak_areas, Table_Standards_mM, by = "binding_name")
+data <- p %>%
+  dplyr::select(Metabolite.x, Name.x, Mean, Standard_conc_in_mM) %>%
+  rename(Name = Name.x) %>%
+  rename(Metabolite = Metabolite.x) %>%  
+  na.omit(p)
+
+
+#calculate linear regression 
+lin_reg <- data.frame(NULL)
+for(metabolite_name in unique(data$Metabolite)){
+  m <- data %>% 
+    filter(Metabolite == metabolite_name)  
+  m <- summary(lm(m$Mean~m$Standard_conc_in_mM))    # run model
+  lin_reg[metabolite_name, 1] <- names(data)[metabolite_name]           # print variable name
+  lin_reg[metabolite_name, 2] <- m$coefficients[1,1]   # intercept
+  lin_reg[metabolite_name, 3] <- m$coefficients[2,1] 
+}
+names(lin_reg) <- c("y.variable", "intercept", "coef.x")
+lin_reg <- lin_reg %>%  
+  mutate(Metabolite = row.names(lin_reg)) 
+lin_reg$y.variable = NULL
+
+#"y = intercept + coef.x * x"
+#we want to know x (mM on x axis) 
+#x = (y+intercept)/coef.x
+#y are the peak areas from our samples 
+Table_for_all <- left_join(Table_final_GBM, lin_reg, by = "Metabolite") 
+FinalTable <- left_join(Table_for_all, Table_Blank_GBM, by = "Metabolite") %>% 
+  rename(Name = Name.x) %>%  
+  rename(Blank_value = Fresh_value) %>%  
+  na.omit(FinalTable)
+FinalTable$Name.y = NULL 
+FinalTable <- FinalTable %>%  
+  mutate(conc_mMol = ((value+intercept)/coef.x )) %>% 
+  mutate(conc_Mol = conc_mMol/1000 ) %>%  
+  mutate(Blank_conc_mMol = ((Blank_value+intercept)/coef.x )) %>% 
+  mutate(Blank_conc_Mol = Blank_conc_mMol/1000 ) %>%  
+#normalize to blank (fresh medium)
+  mutate(Delta_conc_Mol_fresh_Blank = (conc_Mol - Blank_conc_Mol)) %>% 
+  mutate(Number_of_Moles = Delta_conc_Mol_fresh_Blank * 0.001) %>% 
+#normalize to protein 
+  mutate(Number_of_Moles_per_protein = Number_of_Moles/protein_well) %>% 
+#normalize to incubation with tracer (per default 48hours), to calculate uptake and release rates in mol per hour 
+  mutate(Moles_per_protein_per_hour = Number_of_Moles_per_protein/48 ) %>% 
+#calculate fmol 
+  mutate(fmol_protein_hour = Moles_per_protein_per_hour*1000000000000000) %>%  
+
+  separate(Name, into = c("V1", "V2", "V3", "V4"), sep = "_") %>% 
+  mutate(Name = glue::glue("{V1}_{V2}_{V3}")) 
+
+write_csv(FinalTable, "C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/Extracellular metabolomics/Glioblastoma/output files GBM cells/GBM_extracellular_results.csv")
+
+
+
+```
+
+
+```{r linear regression graphs}
+
+###########################################################################
+#plotting of linear regression for multiple metabolites
+
+for(metabolite_name in unique(data$Metabolite)){
+  Data <- data %>%
+    filter(Metabolite == metabolite_name)
+  
+ #define where you want to have your plots   
+ mypath <- file.path("C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/Extracellular metabolomics/Glioblastoma/plots standards GBM cells/",paste(metabolite_name, ".png", sep = ""))
+
+ png(file=mypath)
+    mytitle = paste(metabolite_name)
+    plot(x = Data$Standard_conc_in_mM, y = Data$Mean, cex = 1.3, pch = 16, xlab = "conc in mM", ylab = "Mean peak areas", main = metabolite_name)
+    #abline(lm(data$Mean ~ data$Standard_conc_in_mM))
+    
+     
+ dev.off()
+ 
+}
+
+
+
+
+###########################################################################
+```
+
+
+```{r Exporting of data}
+#calculate the mean of the biological replicates to plot the mean of the biological replicates 
+Table_Mean_Technical_Replicates <- FinalTable %>%
+  ungroup() %>%
+  group_by(Metabolite, Name) %>%
+  mutate("Mean_Technical_Replicates" = mean(fmol_protein_hour),
+         "Stdev_Technical_Replicates" = sd(fmol_protein_hour)) %>%
+  distinct(Metabolite, Name, .keep_all = TRUE)
+write_csv(Table_Mean_Technical_Replicates, "C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/Extracellular metabolomics/Glioblastoma/output files GBM cells/GBM_extracellular_results_mean_technical_rep.csv")
+#FinalTable <- Table_Mean_Biological_Replicates
+
+
+FinalTable <- Table_Mean_Technical_Replicates 
+# FinalTable$Name <- factor(FinalTable$Name, levels = c("Astrocytes_A8mut_normoxia", "Astrocytes_wt_normoxia", "Astrocytes_DJ1OE_normoxia"))
+# #,                      "Astrocytes_A8mut_hypoxia", "Astrocytes_wt_hypoxia", "Astrocytes_DJ1OE_hypoxia"))
+
+
+```
+
+
+# Automated image generator
+```{r automated plots including stats, fig.height= 8, fig.width= 15}
+#define where you want to have your plots
+DataDirectory <- "C:/Users/pauline.mencke/Documents/Pauline/Lab/Metabolite tracing/Extracellular metabolomics/Glioblastoma/plots GBM cells/"
+#define the graph function
+make_graph <- function(Data, x, DataDirectory){
+  #define the metabolite name and set a name for the file
+  metabolite_name <- x  
+  name <- paste(DataDirectory, metabolite_name, ".png", sep="")
+  #open image creating part of the function, set resolution
+  png(name, width = 720, height = 720, units = "px") 
+  #make the graph
+  Graph <-
+  
+  
+    
+  ggplot(Data, aes(x = Name, y = Mean_Technical_Replicates, col = Name))+
+  geom_bar(aes(fill = Name), stat="identity", colour = "black", position=position_dodge(0.8))+  
+  #geom_errorbar(aes(ymin = Ymin, ymax = Ymax), position=position_dodge(width = 0.9), colour="black")+
+  #geom_errorbar(aes(ymin = Ymin, ymax = Ymax, fill = Name), stat = "identity", width=0.8, position=position_dodge2(0.8), colour = 'black')+
+  #geom_point(position=position_dodge(width=0.8))+
+  ggtitle(metabolite_name)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(plot.title = element_text(size=40))+
+  theme(axis.text.x = element_text(size=20))+                            
+  theme(axis.text.y = element_text(size=20))+
+  #theme(legend.text=element_text(size=20))+
+  theme(axis.title.x = element_text(size=20))+
+  theme(axis.title.y = element_text(size=20))+
+  theme(axis.text.x=element_blank())+
+  #theme(legend.position = "none")+
+  theme(legend.title=element_blank())+
+  
+    # 
+    # 
+    # ggplot(Data, aes(x = Mass, y = Mean_Biological_Replicates, fill = Name, pattern = condition)) + 
+    # geom_col_pattern(position = position_dodge(width = 0.9), stat = "identity",
+    #                  #pattern = c("none", "none", "none" , "stripe", "stripe", "stripe"), 
+    #                  width = 0.75, 
+    #                  color = "black", 
+    #                  pattern_fill = "black",
+    #                  pattern_angle = 45,
+    #                  pattern_density = 0.1,
+    #                  pattern_spacing = 0.025,
+    #                  pattern_key_scale_factor = 0.6) +
+    #                  #mapping=aes(pattern=condition)) +
+    #  scale_pattern_manual(values = c(hypoxia = "stripe", normoxia = "none")) +
+    #  guides(pattern = guide_legend(override.aes = list(fill = "white")),
+    #      fill = guide_legend(override.aes = list(pattern = "none"))) +
+    # 
+   
+  #set colours
+  #scale_fill_manual(values=c("red", "green", "yellow"))+
+                             #, "red", "green", "yellow", "red", "green", "yellow", "red", "green", "yellow")) +
+           
+  geom_errorbar(mapping=aes(ymin = Ymin, ymax = Ymax, fill = Name), position=position_dodge(width=0.8), colour="black")#+
+  #geom_point(position=position_dodge(width=0.8))+
+  # ggtitle(metabolite_name)+
+  # theme_classic() +
+  # theme(plot.title = element_text(hjust = 0.5))#+
+  #add statistics
+  #stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.001, bracket.nudge.y = 0, dodge = 0.8, hide.ns = TRUE)
+  #by printing, the graph is saved at the data directory   
+  print(Graph)
+  #the png module is closed
+  dev.off()
+  
+}
+
+
+#run the for loop 
+for(metabolite_name in unique(FinalTable$Metabolite)){
+  Data <- FinalTable %>% 
+    filter(Metabolite == metabolite_name) %>% 
+    mutate(Ymin = (Mean_Technical_Replicates-Stdev_Technical_Replicates),
+         Ymax = (Mean_Technical_Replicates+Stdev_Technical_Replicates)) 
+    
+  
+  make_graph(Data, metabolite_name, DataDirectory)
+}
+
+
+
+
+
+
+```
+
+
+
+
