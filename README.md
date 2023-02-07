@@ -6,12 +6,12 @@ in Parkinson’s disease and Glioblastoma
 
 
 
-Figure 3: 
-Figure 5
-Figure 6
-Figure 7
+Figure 3: Metabolomics analysis extracellular metabolites Astrocytes paper, Metabolomics analysis intracellular metabolites Astrocytes paper
+Figure 5: Metabolomics analysis intracellular metabolites Astrocytes paper
+Figure 6: Metabolomics analysis intracellular metabolites GBM cells
+Figure 7: Metabolomics analysis intracellular metabolites LC_MS Astrocytes paper, Metabolomics analysis intracellular metabolites LC_MS Astrocytes paper Gln and Glc tracing
 
 
-R`. The paper also mentions MatLab scripts -- are they somewhere in the repository?
 
-To improve further, it is uncommon to save .zip archive files in git; usually it is more convenient (and useful) to store all the files unpacked, preferably organized in directories."
+
+
