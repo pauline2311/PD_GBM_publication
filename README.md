@@ -8,7 +8,7 @@ Imaging and Metabolomics:
 Raw data are available with author. 
 
 Imaging: 
-Code available with author 
+Code was used for Suppl. Figure 1B and C 
 
 Metabolomics:
 Which script was used for which Figure: 
