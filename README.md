@@ -4,8 +4,13 @@
 Regulation of metabolism and immune response via DJ-1 defines human astrocytic cell fate 
 in Parkinson’s disease and Glioblastoma  
 
+Imaging and Metabolomics:
 Raw data are available with author. 
 
+Imaging: 
+Code available with author 
+
+Metabolomics:
 Which script was used for which Figure: 
 
 Figure 3: 
